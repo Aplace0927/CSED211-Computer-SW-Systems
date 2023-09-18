@@ -267,7 +267,21 @@ unsigned float_i2f(int x) {
  */
 int float_f2i(unsigned uf) {
    unsigned sign = uf >> 31;
-   unsigned mantissa = (uf << 9) >> 9;
+   unsigned norm_mantissa = 1 << 23 | (uf << 9) >> 9;
    int exponent = ((uf >> 23) & 0xFF) - 0x7F;
-   return 0xDEADBEEF;
+   int result = 0x80000000U;
+   
+   /* Un-representable with Integer (INF, NaN)*/
+   if (exponent >= 31) {
+      return result;
+   }
+
+   /* Smaller than 1 is 0*/
+   if (exponent < 0){
+      return 0;
+   }
+
+   result = exponent < 23 ? norm_mantissa >> (23 - exponent) : norm_mantissa << (exponent - 23);
+
+   return sign ? -result : result;
 }
