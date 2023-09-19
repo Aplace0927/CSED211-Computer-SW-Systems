@@ -228,14 +228,14 @@ unsigned float_twice(unsigned uf) {
    unsigned sign = uf >> 31;
    unsigned mantissa = (uf << 9) >> 9;
    unsigned exponent = (uf >> 23) & 0xFF;
-   unsigned mantissa_of = (mantissa << 1) >> 23 + !!exponent;
+   unsigned mantissa_of = (mantissa << 1) >> 23 + (exponent != 0);
 
    if (!(uf << 1) || exponent == 0xFF) // INF, NaN * 2 -> INF, NaN
    {
       return uf;
    }
 
-   return (sign) << 31 | (exponent + mantissa_of + !!exponent) << 23 | ((mantissa << 9) >> (9 - !exponent)); 
+   return (sign) << 31 | (exponent + mantissa_of + (exponent != 0)) << 23 | ((mantissa << 9) >> (9 - !exponent)); 
 }
 /* 
  * float_i2f - Return bit-level equivalent of expression (float) x
@@ -246,12 +246,33 @@ unsigned float_twice(unsigned uf) {
  *   Max ops: 30
  *   Rating: 4
  */
-unsigned float_i2f(int x) {
-   unsigned exponent = 0;
-   unsigned mantissa = 0;
-   unsigned sign = (x >> 31) & 0x1;
-   unsigned t = sign ? (~x + 1) : x;
-   return 0xDEADBEEF;
+unsigned float_i2f(int x) {   
+   int sign;
+   unsigned abs, cpy_abs, exp, mantissa, guard, remainder;
+   
+   if(!x){
+      return x;
+   }
+
+   sign = (x >> 31);
+
+   exp = 0x7F;
+   abs = sign ? -x : x;
+   cpy_abs = abs;
+
+   while (cpy_abs > 0b1)
+   {
+      cpy_abs >>= 1;
+      exp++;
+   }
+
+   mantissa = (abs << (0x9f - exp) ) >> 9;
+   guard = exp >= 0x97 ? (abs >> (exp - 0x97)) & 0b1 : 0;
+   remainder = exp >= 0x98 ? (abs << (0xb7 - exp)) != 0 : 0;
+    
+   mantissa += !((!(mantissa & 0b1) & guard & !remainder) || !guard); // ~[[2], [0,1,4,5]] -> [3, 6, 7]
+
+   return ((sign << 31) | (exp << 23)) + mantissa;
 }
 /* 
  * float_f2i - Return bit-level equivalent of expression (int) f
