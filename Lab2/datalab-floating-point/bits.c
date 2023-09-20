@@ -228,14 +228,14 @@ unsigned float_twice(unsigned uf) {
    unsigned sign = uf >> 31;
    unsigned mantissa = (uf << 9) >> 9;
    unsigned exponent = (uf >> 23) & 0xFF;
-   unsigned mantissa_of = (mantissa << 1) >> 23 + (exponent != 0);
+   unsigned mantissa_of = (mantissa << 1) >> (23 + (exponent != 0));
 
-   if (!(uf << 1) || exponent == 0xFF) // INF, NaN * 2 -> INF, NaN
+   if (exponent == 0xFF) // INF, NaN * 2 -> INF, NaN
    {
       return uf;
    }
 
-   return (sign) << 31 | (exponent + mantissa_of + (exponent != 0)) << 23 | ((mantissa << 9) >> (9 - !exponent)); 
+   return (sign) << 31 | (exponent + mantissa_of + (exponent != 0)) << 23 | ((mantissa << !exponent)); 
 }
 /* 
  * float_i2f - Return bit-level equivalent of expression (float) x
@@ -270,7 +270,7 @@ unsigned float_i2f(int x) {
    guard = exp >= 0x97 ? (abs >> (exp - 0x97)) & 0b1 : 0;
    remainder = exp >= 0x98 ? (abs << (0xb7 - exp)) != 0 : 0;
     
-   mantissa += !((!(mantissa & 0b1) & guard & !remainder) || !guard); // ~[[2], [0,1,4,5]] -> [3, 6, 7]
+   mantissa += !(((!(mantissa & 0b1)) & guard & !remainder) || !guard); // ~[[2], [0,1,4,5]] -> [3, 6, 7]
 
    return ((sign << 31) | (exp << 23)) + mantissa;
 }
@@ -287,10 +287,12 @@ unsigned float_i2f(int x) {
  *   Rating: 4
  */
 int float_f2i(unsigned uf) {
-   unsigned sign = uf >> 31;
-   unsigned norm_mantissa = 1 << 23 | (uf << 9) >> 9;
-   int exponent = ((uf >> 23) & 0xFF) - 0x7F;
-   int result = 0x80000000U;
+   unsigned sign, norm_mantissa;
+   int exponent, result;
+   sign = uf >> 31;
+   norm_mantissa = 1 << 23 | (uf << 9) >> 9;
+   exponent = ((uf >> 23) & 0xFF) - 0x7F;
+   result = (1U << 31);
    
    /* Un-representable with Integer (INF, NaN)*/
    if (exponent >= 31) {
