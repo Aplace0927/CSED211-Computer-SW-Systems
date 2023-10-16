@@ -185,7 +185,7 @@ End of assembler dump.
 
 `read_six_numbers`는 6개의 숫자를 읽어서 첫 번째 인자로 전달된 주소에 쓰고,  6개가 아니면 `explode_bomb`을 터트리는 함수이다.
 
-`0x40166e`~`0x40168a`에 `__iscoc99_sscanf`를 통해 기록될 주소를 `0x4`byte 간격으로 64-bit calling convention에 맞게 인자를 쌓아 올리고, 첫번째 인자로 `0x40168e`에서 `"%d %d %d %d %d %d %d"`의 format string을 `esi`에 넘겨서 `rsi, rdi, rdx, rcx, r8, r9, (stack...)` 순서로 인자를 설정하는 모습을 볼 수 있다.
+`0x40166e`~`0x40168a`에 `__iscoc99_sscanf`를 통해 기록될 주소를 `0x4`byte 간격으로 64-bit calling convention에 맞게 인자를 쌓아 올리고, 첫 번째 인자로 `rdi` (해당 함수로 전달된 `rdi`는 입력된 string이 저장되있는 주소) 두번째 인자로 `0x40168e`에서 `"%d %d %d %d %d %d %d"`의 format string을 `esi`에 넘겨서 `rdi, rsi, rdx, rcx, r8, r9, (stack...)` 순서로 인자를 설정하도록, Calling convention을 지키는 모습을 볼 수 있다.
 
 
 
