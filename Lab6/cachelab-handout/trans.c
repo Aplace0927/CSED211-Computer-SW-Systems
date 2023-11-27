@@ -25,113 +25,113 @@ int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 char transpose_submit_desc[] = "Transpose submission";
 void transpose_submit(int M, int N, int A[N][M], int B[M][N])
 {
-    int Loop, rT, cT;
+    int rT, cT, R, C;
     int T0, T1, T2, T3, T4, T5, T6, T7;
     if (M == 32)
     {
-        for (Loop = 0; (Loop >> 8) < N; Loop += (0x100 * BLOCK_SIZE))
+        for (R = 0; R < N; R += BLOCK_SIZE)
         {
-            for (Loop &= 0xFF00; (Loop & 0xFF) < M; Loop += (0x1 * BLOCK_SIZE))
+            for (C = 0; C < M; C += BLOCK_SIZE)
             {
                 for (rT = 0; rT < BLOCK_SIZE; rT++)
                 {
 
-                    T0 = A[((Loop >> 8) & 0xFF) + rT][(Loop & 0xFF)];
-                    T1 = A[((Loop >> 8) & 0xFF) + rT][(Loop & 0xFF) + 1];
-                    T2 = A[((Loop >> 8) & 0xFF) + rT][(Loop & 0xFF) + 2];
-                    T3 = A[((Loop >> 8) & 0xFF) + rT][(Loop & 0xFF) + 3];
-                    T4 = A[((Loop >> 8) & 0xFF) + rT][(Loop & 0xFF) + 4];
-                    T5 = A[((Loop >> 8) & 0xFF) + rT][(Loop & 0xFF) + 5];
-                    T6 = A[((Loop >> 8) & 0xFF) + rT][(Loop & 0xFF) + 6];
-                    T7 = A[((Loop >> 8) & 0xFF) + rT][(Loop & 0xFF) + 7];
+                    T0 = A[R + rT][C];
+                    T1 = A[R + rT][C + 1];
+                    T2 = A[R + rT][C + 2];
+                    T3 = A[R + rT][C + 3];
+                    T4 = A[R + rT][C + 4];
+                    T5 = A[R + rT][C + 5];
+                    T6 = A[R + rT][C + 6];
+                    T7 = A[R + rT][C + 7];
 
-                    B[(Loop & 0xFF)][((Loop >> 8) & 0xFF) + rT] = T0;
-                    B[(Loop & 0xFF) + 1][((Loop >> 8) & 0xFF) + rT] = T1;
-                    B[(Loop & 0xFF) + 2][((Loop >> 8) & 0xFF) + rT] = T2;
-                    B[(Loop & 0xFF) + 3][((Loop >> 8) & 0xFF) + rT] = T3;
-                    B[(Loop & 0xFF) + 4][((Loop >> 8) & 0xFF) + rT] = T4;
-                    B[(Loop & 0xFF) + 5][((Loop >> 8) & 0xFF) + rT] = T5;
-                    B[(Loop & 0xFF) + 6][((Loop >> 8) & 0xFF) + rT] = T6;
-                    B[(Loop & 0xFF) + 7][((Loop >> 8) & 0xFF) + rT] = T7;
+                    B[C][R + rT] = T0;
+                    B[C + 1][R + rT] = T1;
+                    B[C + 2][R + rT] = T2;
+                    B[C + 3][R + rT] = T3;
+                    B[C + 4][R + rT] = T4;
+                    B[C + 5][R + rT] = T5;
+                    B[C + 6][R + rT] = T6;
+                    B[C + 7][R + rT] = T7;
                 }
             }
         }
     }
     else if (M == 64)
     {
-        for (Loop = 0; ((Loop >> 8) & 0xFF) < N; Loop += (0x100 * BLOCK_SIZE))
+        for (R = 0; R < N; R += BLOCK_SIZE)
         {
-            for (Loop &= 0xFF00; (Loop & 0xFF) < M; Loop += (0x1 * BLOCK_SIZE))
+            for (C = 0; C < M; C += BLOCK_SIZE)
             {
                 /* SubBlockTranspose_SubQuad2 */
-                for (rT = ((Loop >> 8) & 0xFF); rT < ((Loop >> 8) & 0xFF) + BLOCK_SIZE / 2; rT++)
+                for (rT = R; rT < R + BLOCK_SIZE / 2; rT++)
                 {
-                    T0 = A[rT][(Loop & 0xFF) + 0];
-                    T1 = A[rT][(Loop & 0xFF) + 1];
-                    T2 = A[rT][(Loop & 0xFF) + 2];
-                    T3 = A[rT][(Loop & 0xFF) + 3];
-                    T4 = A[rT][(Loop & 0xFF) + 4];
-                    T5 = A[rT][(Loop & 0xFF) + 5];
-                    T6 = A[rT][(Loop & 0xFF) + 6];
-                    T7 = A[rT][(Loop & 0xFF) + 7];
+                    T0 = A[rT][C + 0];
+                    T1 = A[rT][C + 1];
+                    T2 = A[rT][C + 2];
+                    T3 = A[rT][C + 3];
+                    T4 = A[rT][C + 4];
+                    T5 = A[rT][C + 5];
+                    T6 = A[rT][C + 6];
+                    T7 = A[rT][C + 7];
 
-                    B[(Loop & 0xFF) + 0][rT + 0] = T0;
-                    B[(Loop & 0xFF) + 1][rT + 0] = T1;
-                    B[(Loop & 0xFF) + 2][rT + 0] = T2;
-                    B[(Loop & 0xFF) + 3][rT + 0] = T3;
-                    B[(Loop & 0xFF) + 0][rT + 4] = T4;
-                    B[(Loop & 0xFF) + 1][rT + 4] = T5;
-                    B[(Loop & 0xFF) + 2][rT + 4] = T6;
-                    B[(Loop & 0xFF) + 3][rT + 4] = T7;
+                    B[C + 0][rT + 0] = T0;
+                    B[C + 1][rT + 0] = T1;
+                    B[C + 2][rT + 0] = T2;
+                    B[C + 3][rT + 0] = T3;
+                    B[C + 0][rT + 4] = T4;
+                    B[C + 1][rT + 4] = T5;
+                    B[C + 2][rT + 4] = T6;
+                    B[C + 3][rT + 4] = T7;
                 }
 
                 /* SubBlockTranspose_SubQuad13 */
-                for (cT = (Loop & 0xFF); cT < (Loop & 0xFF) + BLOCK_SIZE / 2; cT++)
+                for (cT = C; cT < C + BLOCK_SIZE / 2; cT++)
                 {
-                    T0 = A[((Loop >> 8) & 0xFF) + SUBBLOCK_SIZE + 0][cT];
-                    T1 = A[((Loop >> 8) & 0xFF) + SUBBLOCK_SIZE + 1][cT];
-                    T2 = A[((Loop >> 8) & 0xFF) + SUBBLOCK_SIZE + 2][cT];
-                    T3 = A[((Loop >> 8) & 0xFF) + SUBBLOCK_SIZE + 3][cT];
-                    T4 = B[cT][((Loop >> 8) & 0xFF) + 4];
-                    T5 = B[cT][((Loop >> 8) & 0xFF) + 5];
-                    T6 = B[cT][((Loop >> 8) & 0xFF) + 6];
-                    T7 = B[cT][((Loop >> 8) & 0xFF) + 7];
+                    T0 = A[R + SUBBLOCK_SIZE + 0][cT];
+                    T1 = A[R + SUBBLOCK_SIZE + 1][cT];
+                    T2 = A[R + SUBBLOCK_SIZE + 2][cT];
+                    T3 = A[R + SUBBLOCK_SIZE + 3][cT];
+                    T4 = B[cT][R + 4];
+                    T5 = B[cT][R + 5];
+                    T6 = B[cT][R + 6];
+                    T7 = B[cT][R + 7];
 
-                    B[cT][((Loop >> 8) & 0xFF) + 4] = T0;
-                    B[cT][((Loop >> 8) & 0xFF) + 5] = T1;
-                    B[cT][((Loop >> 8) & 0xFF) + 6] = T2;
-                    B[cT][((Loop >> 8) & 0xFF) + 7] = T3;
-                    B[cT + 4][((Loop >> 8) & 0xFF) + 0] = T4;
-                    B[cT + 4][((Loop >> 8) & 0xFF) + 1] = T5;
-                    B[cT + 4][((Loop >> 8) & 0xFF) + 2] = T6;
-                    B[cT + 4][((Loop >> 8) & 0xFF) + 3] = T7;
+                    B[cT][R + 4] = T0;
+                    B[cT][R + 5] = T1;
+                    B[cT][R + 6] = T2;
+                    B[cT][R + 7] = T3;
+                    B[cT + 4][R + 0] = T4;
+                    B[cT + 4][R + 1] = T5;
+                    B[cT + 4][R + 2] = T6;
+                    B[cT + 4][R + 3] = T7;
                 }
 
                 /* SubBlockTranspose_SubQuad4 */
-                for (rT = ((Loop >> 8) & 0xFF) + SUBBLOCK_SIZE; rT < ((Loop >> 8) & 0xFF) + BLOCK_SIZE; rT++)
+                for (rT = R + SUBBLOCK_SIZE; rT < R + BLOCK_SIZE; rT++)
                 {
-                    T4 = A[rT][(Loop & 0xFF) + 4];
-                    T5 = A[rT][(Loop & 0xFF) + 5];
-                    T6 = A[rT][(Loop & 0xFF) + 6];
-                    T7 = A[rT][(Loop & 0xFF) + 7];
+                    T4 = A[rT][C + 4];
+                    T5 = A[rT][C + 5];
+                    T6 = A[rT][C + 6];
+                    T7 = A[rT][C + 7];
 
-                    B[(Loop & 0xFF) + 4][rT] = T4;
-                    B[(Loop & 0xFF) + 5][rT] = T5;
-                    B[(Loop & 0xFF) + 6][rT] = T6;
-                    B[(Loop & 0xFF) + 7][rT] = T7;
+                    B[C + 4][rT] = T4;
+                    B[C + 5][rT] = T5;
+                    B[C + 6][rT] = T6;
+                    B[C + 7][rT] = T7;
                 }
             }
         }
     }
     else if (M == 61)
     {
-        for (Loop = 0; (Loop >> 8) < N; Loop += (0x100 * 16))
+        for (R = 0; R < N; R += 16)
         {
-            for (Loop &= 0xFF00; (Loop & 0xFF) < M; Loop += (0x1 * 16))
+            for (C = 0; C < M; C += 16)
             {
-                for (rT = (Loop & 0xFF); rT < (Loop & 0xFF) + (((M - (Loop & 0xFF)) > 16) ? 16 : M - (Loop & 0xFF)); rT++)
+                for (rT = C; rT < C + (((M - C) > 16) ? 16 : M - C); rT++)
                 {
-                    for (cT = ((Loop >> 8) & 0xFF); cT < ((Loop >> 8) & 0xFF) + (((N - ((Loop >> 8) & 0xFF)) > 16) ? 16 : N - ((Loop >> 8) & 0xFF)); cT++)
+                    for (cT = R; cT < R + (((N - R) > 16) ? 16 : N - R); cT++)
                     {
                         B[rT][cT] = A[cT][rT];
                     }
