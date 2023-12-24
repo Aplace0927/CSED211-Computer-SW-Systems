@@ -98,6 +98,14 @@
 #define ADJUST(sz) (ALIGN(MAX(sz, DSIZE) + DSIZE))
 #endif
 
+////////// REALLOCATION POLICY //////////
+
+#define EXTEND_ONLY_TOP
+
+// #define GROW_TO_NEXT_FREE
+
+/////////////////////////////////////////
+
 ////////////////////////////////////////////////////////////////////////////////////
 
 ////////// MACRO FUNCTIONS SUGGESTED IN CSAPP TEXTBOOK (and its variants) //////////
@@ -575,7 +583,6 @@ void mm_free(void *ptr)
 
     /* Coalesce the block (if possible) */
     coalesce(ptr);
-
     return;
 }
 
@@ -602,12 +609,11 @@ void *mm_realloc(void *ptr, size_t sz)
     }
 
     void *realloc_ptr = ptr;                           /* Pointer to be returned */
-    size_t realloc_sz = ALIGN(MAX(sz, DSIZE) + DSIZE); /* Adjust block size to include boundary tag and alignment requirements */
-    int delta_sz = realloc_sz - GET_SIZE(HDRP(ptr));   /* Size increasing: type should be `signed` integer. */
-    int rem;                                           /* Size left over after increasing: also should be `signed` integer. */
+    size_t realloc_sz = ALIGN(MAX(sz, DSIZE)) + DSIZE; /* Adjust block size to include boundary tag and alignment requirements */
+    int rem = realloc_sz - GET_SIZE(HDRP(ptr));        /* Size increasing: type should be `signed` integer. */
 
     /* Block size NOT grown! */
-    if (delta_sz <= 0)
+    if (rem <= 0)
     {
         return ptr;
     }
@@ -620,19 +626,15 @@ void *mm_realloc(void *ptr, size_t sz)
      * (Block size == TOP_CHUNK_INDICATOR) means top chunk (allocated in `mm_init` as `init_zero_block`, and `extend_heap`)
      * With its magic number 0xC5ED2110.
      */
+#ifdef EXTEND_ONLY_TOP
     if (GET_SIZE(HDRP(NEXT_BLKP(ptr))) == TOP_CHUNK_INDICATOR)
     {
-        rem = realloc_sz - GET_SIZE(HDRP(ptr));
-
         /* Extend heap by multiple of `mem_pagesize()`, which is 4KB in LINUX (by ALIGN_PAGE)*/
-        if (rem > 0)
+        if (extend_heap(ALIGN_PAGE(rem)) == NULL)
         {
-            if (extend_heap(ALIGN_PAGE(rem)) == NULL)
-            {
-                return NULL;
-            }
-            rem -= ALIGN_PAGE(rem);
+            return NULL;
         }
+        rem -= ALIGN_PAGE(rem);
 
         /* Set up for remaining page area */
         segrlist_remove(NEXT_BLKP(ptr));
@@ -640,23 +642,50 @@ void *mm_realloc(void *ptr, size_t sz)
         /* Set `ALLOCATED` bit of memory newly allocated on extended heap area. */
         PUT(HDRP(ptr), PACK(realloc_sz - rem, ALLOCATED));
         PUT(FTRP(ptr), PACK(realloc_sz - rem, ALLOCATED));
-    }
-    /**
-     * If not a top chunk, then cannot extend heap size. So malloc() to new area.
-     * Copy the original data to newly allocated memory.
-     */
-    else
-    {
-        /* Allocate new space except top chunk overhead*/
-        if ((realloc_ptr = mm_malloc(realloc_sz - DSIZE)) == NULL)
-        {
-            return NULL;
-        }
 
-        /* Copy data to the newly allocated area, and free the original space. */
-        memcpy(realloc_ptr, ptr, MIN(sz, realloc_sz));
-        mm_free(ptr);
+        return ptr;
     }
+#endif
+
+    /**
+     * If not a top chunk, there are 2 choices to reallocate
+     * - If next chunk is freed chunk and enough large to contain new allocation, then merge the block, without memory copy.
+     * - But there are no sufficient next chunk, copy the original data to newly allocated memory.
+     *
+     * However, sometimes GROW_TO_NEXT_FREE Policy might show worse utilization than EXTEND_ONLY_TOP Policy.
+     * In testcase `realloc2.rep` and `realloc2-bal.rep`, Continuously reallocating big memory with step of small size with putting little size on its next chunk.
+     */
+#ifdef GROW_TO_NEXT_FREE
+    /* There is sufficient adjacent free block to grew the size up. */
+    if (GET_ALLOC(HDRP(NEXT_BLKP(ptr))) == FREED && GET_SIZE(HDRP(NEXT_BLKP(ptr))) >= rem)
+    {
+        rem -= GET_SIZE(HDRP(NEXT_BLKP(ptr)));
+
+        /* set up for the next block */
+        segrlist_remove(NEXT_BLKP(ptr));
+
+        /* Grow to the next block, and assign the size to the grown block */
+        PUT(HDRP(ptr), PACK(realloc_sz - rem, ALLOCATED));
+        PUT(FTRP(ptr), PACK(realloc_sz - rem, ALLOCATED));
+
+        /* If memory had reached to the top chunk, maintain top chunk consistency */
+        if (GET_SIZE(HDRP(NEXT_BLKP(ptr))) == TOP_CHUNK_INDICATOR)
+        {
+            PUT(HDRP(NEXT_BLKP(ptr)), PACK(TOP_CHUNK_INDICATOR, ALLOCATED));
+        }
+        return ptr;
+    }
+#endif
+
+    /* Allocate new space except top chunk overhead*/
+    if ((realloc_ptr = mm_malloc(realloc_sz - DSIZE)) == NULL)
+    {
+        return NULL;
+    }
+
+    /* Copy data to the newly allocated area, and free the original space. */
+    memcpy(realloc_ptr, ptr, MIN(sz, realloc_sz));
+    mm_free(ptr);
 
     /* Return the reallocated block */
     return realloc_ptr;

@@ -266,6 +266,20 @@ Bin은 Segregated list에서 Free block을 관리하기 위해 사용하는 각 
   * `FD`의 경우 Free block에서 Forward Free Block Pointer가 위치하는 Offset `0`의  `(char*) (blk)` / `BK`의 경우 Free block에서 Backward Free Block Pointer가 위치하는 Offset `+WSIZE ` byte의 `(char*) ((blk)+ WSIZE)`를 참조한다.
   * `PTR`의 경우 참조할 Address를, `BLK`의 경우 직접 참조한 값을 반환한다.
 
+#### Reallocation Policy Setting Macros
+
+```c
+////////// REALLOCATION POLICY //////////
+
+#define EXTEND_ONLY_TOP
+
+// #define GROW_TO_NEXT_FREE
+
+/////////////////////////////////////////
+```
+
+`mm_realloc`에서 사용할 Reallocation policy를 사용하기 위해 사용한 Macro이다. 2개의 옵션은 독립적으로 작용하며, 자세한 설명은 [Reallocation Policy and Utilization](#Reallocation-Policy-and-Utilization)에서 다루었다.
+
 ### Functions
 
 #### Memory Allocator Utilities
@@ -780,12 +794,11 @@ void *mm_realloc(void *ptr, size_t sz)
     }
 
     void *realloc_ptr = ptr;                           /* Pointer to be returned */
-    size_t realloc_sz = ALIGN(MAX(sz, DSIZE) + DSIZE); /* Adjust block size to include boundary tag and alignment requirements */
-    int delta_sz = realloc_sz - GET_SIZE(HDRP(ptr));   /* Size increasing: type should be `signed` integer. */
-    int rem;                                           /* Size left over after increasing: also should be `signed` integer. */
+    size_t realloc_sz = ALIGN(MAX(sz, DSIZE)) + DSIZE; /* Adjust block size to include boundary tag and alignment requirements */
+    int rem = realloc_sz - GET_SIZE(HDRP(ptr));        /* Size increasing: type should be `signed` integer. */
 
     /* Block size NOT grown! */
-    if (delta_sz <= 0)
+    if (rem <= 0)
     {
         return ptr;
     }
@@ -798,19 +811,15 @@ void *mm_realloc(void *ptr, size_t sz)
      * (Block size == TOP_CHUNK_INDICATOR) means top chunk (allocated in `mm_init` as `init_zero_block`, and `extend_heap`)
      * With its magic number 0xC5ED2110.
      */
+#ifdef EXTEND_ONLY_TOP
     if (GET_SIZE(HDRP(NEXT_BLKP(ptr))) == TOP_CHUNK_INDICATOR)
     {
-        rem = realloc_sz - GET_SIZE(HDRP(ptr));
-
         /* Extend heap by multiple of `mem_pagesize()`, which is 4KB in LINUX (by ALIGN_PAGE)*/
-        if (rem > 0)
+        if (extend_heap(ALIGN_PAGE(rem)) == NULL)
         {
-            if (extend_heap(ALIGN_PAGE(rem)) == NULL)
-            {
-                return NULL;
-            }
-            rem -= ALIGN_PAGE(rem);
+            return NULL;
         }
+        rem -= ALIGN_PAGE(rem);
 
         /* Set up for remaining page area */
         segrlist_remove(NEXT_BLKP(ptr));
@@ -818,35 +827,65 @@ void *mm_realloc(void *ptr, size_t sz)
         /* Set `ALLOCATED` bit of memory newly allocated on extended heap area. */
         PUT(HDRP(ptr), PACK(realloc_sz - rem, ALLOCATED));
         PUT(FTRP(ptr), PACK(realloc_sz - rem, ALLOCATED));
-    }
-    /**
-     * If not a top chunk, then cannot extend heap size. So malloc() to new area.
-     * Copy the original data to newly allocated memory.
-     */
-    else
-    {
-        /* Allocate new space except top chunk overhead*/
-        if ((realloc_ptr = mm_malloc(realloc_sz - DSIZE)) == NULL)
-        {
-            return NULL;
-        }
 
-        /* Copy data to the newly allocated area, and free the original space. */
-        memcpy(realloc_ptr, ptr, MIN(sz, realloc_sz));
-        mm_free(ptr);
+        return ptr;
     }
+#endif
+    /**
+     * If not a top chunk, there are 2 choices to reallocate
+     * - If next chunk is freed chunk and enough large to contain new allocation, then merge the block, without memory copy.
+     * - But there are no sufficient next chunk, copy the original data to newly allocated memory.
+     *
+     * However, sometimes GROW_TO_NEXT_FREE Policy might show worse utilization than EXTEND_ONLY_TOP Policy.
+     * In testcase `realloc2.rep` and `realloc2-bal.rep`, Continuously reallocating big memory with step of small size with putting little size on its next chunk.
+     */
+
+#ifdef GROW_TO_NEXT_FREE
+    /* There is sufficient adjacent free block to grew the size up. */
+    if (GET_ALLOC(HDRP(NEXT_BLKP(ptr))) == FREED && GET_SIZE(HDRP(NEXT_BLKP(ptr))) >= rem)
+    {
+        rem -= GET_SIZE(HDRP(NEXT_BLKP(ptr)));
+
+        /* set up for the next block */
+        segrlist_remove(NEXT_BLKP(ptr));
+
+        /* Grow to the next block, and assign the size to the grown block */
+        PUT(HDRP(ptr), PACK(realloc_sz - rem, ALLOCATED));
+        PUT(FTRP(ptr), PACK(realloc_sz - rem, ALLOCATED));
+
+        /* If memory had reached to the top chunk, maintain top chunk consistency */
+        if (GET_SIZE(HDRP(NEXT_BLKP(ptr))) == TOP_CHUNK_INDICATOR)
+        {
+            PUT(HDRP(NEXT_BLKP(ptr)), PACK(TOP_CHUNK_INDICATOR, ALLOCATED));
+        }
+        return ptr;
+    }
+#endif
+    /* Allocate new space except top chunk overhead*/
+    if ((realloc_ptr = mm_malloc(realloc_sz - DSIZE)) == NULL)
+    {
+        return NULL;
+    }
+
+    /* Copy data to the newly allocated area, and free the original space. */
+    memcpy(realloc_ptr, ptr, MIN(sz, realloc_sz));
+    mm_free(ptr);
 
     /* Return the reallocated block */
     return realloc_ptr;
 }
 ```
 
-`mm_malloc`과 마찬가지로 Zero-size reallocation의 경우 무시하였다.
+`mm_malloc`과 마찬가지로 Zero-size reallocation의 경우 무시하였다. 해당 `mm_realloc` 은 [Reallocation Policy Setting Macros](#Reallocation-Policy-Setting-Macros)에서 결정하였으며, **실험 결과 `EXTEND_ONLY_TOP` Policy만 활성화 하는 경우 Utilization의 최고치를 보였다.**
 
-1. 만약 현재 Chunk가 Top chunk인 경우 (`GET_SIZE(HDRP(NEXT_BLKP(ptr))) == TOP_CHUNK_INDICATOR`)
-   1. `mm_pagesize()` 단위로 Align하여 Heap을 늘리고, Chunk의 구조를 전달받은 `sz` 만큼 다시 작성하여 기존의 Top chunk pointer 그대로 반환한다.
-2.  그 외 현재 Chunk가 Top chunk가 아닌 경우
-   1. 새로운 영역에 `mm_malloc()`을 통해 새로운 크기만큼 할당 이후, 메모리를 복사한다. 새로운 위치가 반환된다.
+각 Policy는 독립적으로 작동하며 다음과 같이 작동한다.
+
+* `EXTEND_ONLY_TOP`
+  * Top chunk에서 Coalescing을 요구하는 경우, 충분한 크기 (`mm_pagesize()`) 만큼 새로 Allocation하여 `mm_pagesize()`만큼 커진 Chunk를 그대로 사용한다.
+* `GROW_TO_NEXT_FREE`
+  * 만약 Growth를 원하는 Block의 Coalescing을 요구하고, Next Block이 Free chunk인 경우 Next Block의 전체 크기를 모두 합친다.
+
+모든 Policy (에 해당하는 조건)을 만족시키지 못하는 경우는 원하는 크기만큼 새롭게 `malloc`하고 해당하는 Memory의 영역을 모두 `memcpy`를 통해 옮긴다.
 
 ## Result
 
@@ -930,6 +969,98 @@ Total          95%  209279  0.012385 16898
 
 Perf index = 57 (util) + 40 (thru) = 97/100
 ```
+
+## Discussion
+
+### Reallocation Policy and Utilization
+
+두 가지의 독립적인 [Reallocation policy](#Reallocation-Policy-Setting-Macros)를 제안하였고, 모든 조합 (2×2=4)을 `./mdriver -v -f ./trace/realloc2-bal.rep`을 사용하여 성능을 실험해 보았으며 다음과 같다. Allocation 관찰의 편의를 위해 각 Case 별 Allocation에 다음을 Print하도록 설정했다.
+
+>  `EXTEND_ONLY_TOP` 시에 `T`(**T**op) / `GROW_TO_NEXT_FREE` 시에 `G` (**G**row) / `mm_malloc`과 memcpy를 통한 Naive한 접근 시에 `C` (**C**opy)
+
+#### Naive approach
+
+>```text
+>CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+>...(중략)... CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+>Results for mm malloc:
+>trace  valid  util     ops      secs  Kops
+> 0       yes   29%   14401  0.001747  8246
+>Total          29%   14401  0.001747  8246
+>
+>Perf index = 18 (util) + 40 (thru) = 58/100
+>```
+
+#### `EXTEND_ONLY_TOP`
+
+> ```text
+> Measuring performance with gettimeofday().
+> CTTTTTTCTTTTTTCTTTTTTCTTTTTTCTTTTTTCTTTTTTCTTTTTTCTTTTTTCTTTTTTCTTTTTTCTTTTTTCTTTTTT
+> Results for mm malloc:
+> trace  valid  util     ops      secs  Kops
+>  0       yes   85%   14401  0.000251 57329
+> Total          85%   14401  0.000251 57329
+> 
+> Perf index = 51 (util) + 40 (thru) = 91/100
+> ```
+
+#### `GROW_TO_NEXT_FREE`
+
+> ```text
+> Measuring performance with gettimeofday().
+> GGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCGGGGGGGCCCG
+> Results for mm malloc:
+> trace  valid  util     ops      secs  Kops
+>  0       yes   38%   14401  0.000249 57905
+> Total          38%   14401  0.000249 57905
+> 
+> Perf index = 23 (util) + 40 (thru) = 63/100
+> ```
+
+#### `EXTEND_ONLY_TOP` `GROW_TO_NEXT_FREE`
+
+> ```text
+> Measuring performance with gettimeofday().
+> GGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCTGGGGGGCT
+> Results for mm malloc:
+> trace  valid  util     ops      secs  Kops
+>  0       yes   52%   14401  0.000222 64986
+> Total          52%   14401  0.000222 64986
+> 
+> Perf index = 31 (util) + 40 (thru) = 71/100
+> ```
+
+### Result of Experiment and Explain
+
+Test에 사용한 trace `realloc2-bal.rep`는 다음과 같은 구성을 가졌다.
+
+```text
+104987
+4801
+14401
+1
+a 0 4092
+a 1 16
+r 0 4097
+a 2 16
+f 1
+r 0 4102
+a 3 16
+f 2
+r 0 4107
+a 4 16
+f 3
+r 0 4112
+a 5 16
+f 4
+...
+```
+
+초기에 4092byte의 큰 Chunk를 할당하고, 상대적으로 작은 16byte를 4092byte 위에 할당한다.  이후 4092byte 할당을 5byte 증가시켜 `mm_realloc`한다. 이후 16byte를 할당하고, 처음으로 할당한 16byte를 해제한다. 큰 Chunk의 할당 좌우로 작은 Chunk를 할당하는 동시에 순서를 정하여 `mm_free`와 `mm_realloc`을 반복하여, Heap memory의 External fragmentation이 일어나도록 하는 (악의적인) Test case임을 확인할 수 있었다.
+
+이 경우, 새롭게 Free된 영역으로 `GROW_TO_NEXT_FREE`를 반복하는 과정보다, 새롭게 `mm_malloc`을 통해 강제로 Big chunk를 Top chunk로 이동, 이동된 Top chunk를 `EXTEND_ONLY_TOP`을 통해 증가시키면서 기존의 Free된 4092byte Free chunk를 활용하여 16byte의 `mm_malloc`과 `mm_free`를 반복하는 Utilization이 훨씬 좋은 성능을 보이는 것으로 관찰되었다. 불가피하게 약 4076byte (4092byte Free chunk - 16byte Repeating allocation)의 External fragmentation이 발생하나, 해당 Allocation method가 현재 Heap structure와 Allocation policy에서 최선의 선택이었다.
+
+이에 따라 제출용 Code에서 [Reallocation policy](#Reallocation-Policy-Setting-Macros)에서 명시한 것과 같이,  `EXTEND_ONLY_TOP` 만을 정의하여 제출하였다.
 
 ## Future
 
