@@ -7,8 +7,8 @@
  * its size by increasing order.
  *
  * When writing a free chunk by spliting large chunk into two equal block, design of this approach is -
- * writing a chunk to HEAD / TAIL side of the bin, if the size of the chunk is smaller / bigger than  -
- * ((1 << k) | (1 << (k - 1))), which is the median value of the size in the corresponding bin.
+ * writing a chunk to smaller side of splitted two chunks, if the size of the chunk is smaller / bigge-
+ * r than ((1 << k) | (1 << (k - 1))), which is the median value of the size in the corresponding bin.
  *
  * In reallocation (`mm_realloc()`), reallocating top chunk can be handled without copying data to ano-
  * ther memory area, by just increasing size of heap, and re-writing top chunk data. Moreover, in this-
@@ -39,8 +39,8 @@
 
 #define SIZEOF_MIN_FREE_CHUNK (4 * WSIZE) // sizeof(size_t) * 2 (for header, footer) + sizeof(void*) * 2 (for fd, bk)
 
-// Find by trial-and-error heuristics.
-#define INIT_HEAP_SZ (1 << 8)
+/* Find by trial-and-error heuristics. */
+#define INIT_HEAP_SZ (mem_pagesize() >> 4)
 
 /**
  * NOBODY will allocate 0xC5ED2110 Bytes = 3.09 GiB!
@@ -54,13 +54,33 @@
  */
 #define TOP_CHUNK_INDICATOR 0xC5ED2110
 
-/* Number of bins in segregated lists */
-#define BIN_SIZE 24
+/**
+ * BIN SIZE and LIBC MALLOC POLICY TO SEGREGATED LIST
+ *
+ * Number of bins in segregated lists.
+ * In actual libc malloc implementation with segregated list with 127 entires -
+ * and 126 bins, with seperated policy to 'SMALL' bin and 'LARGE' bin.
+ *
+ * in 'SMALL' bin,
+ * Free chunk with size smaller than `MIN_LARGE_SIZE` (0x400(x64) / 0x200(x86)) are stored, with linearly seperated size.
+ * Mininum chunk size is 0x20(x64) / 0x10(x86) with increment is 0x10(x64) / 0x8 (x86)
+ *
+ * in `LARGE' bin,
+ * Free chunk with size bigger (or equal) than `MIN_LARGE_SIZE` are stored, with logarithmly seperated size.
+ * There are 32 bins with step size     0x40 byte,
+ *           16 bins with step size    0x200 byte,
+ *            8 bins with step size   0x1000 byte,
+ *            4 bins with step size   0x8000 byte,
+ *            2 bins with step size  0x40000 byte,
+ *            1 bins for leftover huge sized chunk.
+ *
+ * With simple calculation, last largebin bin will contain the size bigger than 0xAAA00.
+ * Round up to the nearest power of the 2 (1 << 20 == 0x100000) to simulate `malloc`.
+ */
+#define BIN_SIZE 20
 
 #define ALLOCATED 1
 #define FREED 0
-
-/////////////////////////////////////////
 
 /* Useful `max`, `min` as macro functions */
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
@@ -78,33 +98,38 @@
 #define ADJUST(sz) (ALIGN(MAX(sz, DSIZE) + DSIZE))
 #endif
 
+////////////////////////////////////////////////////////////////////////////////////
+
 ////////// MACRO FUNCTIONS SUGGESTED IN CSAPP TEXTBOOK (and its variants) //////////
 
 /* Pack a size and allocated bit tag into a word*/
 #define PACK(sz, tag) ((sz) | (tag & ALLOCATED))
 
 /* Read the size and allocation bit from address bp */
-#define GET(bp) (*(size_t *)bp)
-#define GET_SIZE(bp) (GET(bp) & ~0x7)
-#define GET_ALLOC(bp) (GET(bp) & ALLOCATED)
+#define GET(blk) (*(size_t *)blk)
+#define GET_SIZE(blk) (GET(blk) & ~0x7)
+#define GET_ALLOC(blk) (GET(blk) & ALLOCATED)
 
-#define PUT(bp, val) (*(size_t *)((bp)) = (val))
+#define PUT(blk, val) (*(size_t *)((blk)) = (val))
 
-/* Given block ptr bp, compute address of its header and footer */
-#define HDRP(bp) ((char *)(bp)-WSIZE)
-#define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
+/* Given block ptr `blk`, compute address of its header and footer */
+#define HDRP(blk) ((char *)(blk)-WSIZE)
+#define FTRP(blk) ((char *)(blk) + GET_SIZE(HDRP(blk)) - DSIZE)
 
-/* Given block ptr bp, compute address of next and previous blocks */
-#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
-#define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
-
+/* Given block ptr `blk`, compute address of next and previous blocks */
+#define NEXT_BLKP(blk) ((char *)(blk) + GET_SIZE(((char *)(blk)-WSIZE)))
+#define PREV_BLKP(blk) ((char *)(blk)-GET_SIZE(((char *)(blk)-DSIZE)))
 ////////////////////////////////////////////////////////////////////////////////////
 
+////////// CHUNK POINTERS FOR BIN CONSISTENCY //////////
+
 /* Forward and Backward free block (block itself and its pointer) in same bin on segregated list */
-#define FREE_FD_PTR(bp) ((char *)(bp))
-#define FREE_BK_PTR(bp) ((char *)(bp) + WSIZE)
-#define FREE_FD_BLK(bp) (*(char **)(bp))
-#define FREE_BK_BLK(bp) (*(char **)(((char *)(bp) + WSIZE)))
+#define FREE_FD_PTR(blk) ((char *)(blk))
+#define FREE_BK_PTR(blk) ((char *)(blk) + WSIZE)
+#define FREE_FD_BLK(blk) (*(char **)(blk))
+#define FREE_BK_BLK(blk) (*(char **)(((char *)(blk) + WSIZE)))
+
+////////////////////////////////////////////////////////
 
 ////////// FUNCTION DEFINITION //////////
 
@@ -313,6 +338,7 @@ static void *place(void *ptr, size_t asz)
     PUT(HDRP(NEXT_BLKP(ptr)), PACK(asz < mid ? rem : asz, asz >= mid));
     PUT(FTRP(NEXT_BLKP(ptr)), PACK(asz < mid ? rem : asz, asz >= mid));
 
+    /* Insert the leftover splitted block */
     segrlist_insert(asz >= mid ? ptr : NEXT_BLKP(ptr), rem);
     return asz >= mid ? NEXT_BLKP(ptr) : ptr;
 }
@@ -320,13 +346,6 @@ static void *place(void *ptr, size_t asz)
 ///////////////////////////////////////////////////////////////////////////
 
 //////////////////// Segregated List Utility Functions ////////////////////
-
-/*
- * segrlist_insert - Insert a block pointer into a segregated list. Lists are
- *               segregated by byte size, with the n-th list spanning byte
- *               sizes 2^n to 2^(n+1)-1. Each individual list is sorted by
- *               pointer address in ascending order.
- */
 
 /**
  * @brief Insert the chunk to segregated list, with its size
